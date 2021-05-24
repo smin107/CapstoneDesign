@@ -17,7 +17,7 @@ from pathlib import Path
 import cv2
 import torch
 import torch.backends.cudnn as cudnn
-
+import numpy as np
 
 
 palette = (2 ** 11 - 1, 2 ** 15 - 1, 2 ** 20 - 1)
@@ -44,24 +44,74 @@ def compute_color_for_labels(label):
     return tuple(color)
 
 
-def draw_boxes(img, bbox, identities=None, offset=(0, 0)):
+def draw_boxes(img, bbox, cls_name, identities=None, offset=(0, 0)):
     for i, box in enumerate(bbox):
         x1, y1, x2, y2 = [int(i) for i in box]
         x1 += offset[0]
         x2 += offset[0]
         y1 += offset[1]
         y2 += offset[1]
+        cenx = int((x1+x2)/2)
+        ceny = int((y1+y2)/2)
+        
         # box text and bar
         id = int(identities[i]) if identities is not None else 0
         color = compute_color_for_labels(id)
-        label = '{}{:d}'.format("", id)
+        label = '{}{:d}{:s}'.format("", id, cls_name[i])
+        #print(f'{x1} {y1} {x1} {y2} {id} {cls_name[i]}\n')
         t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 2, 2)[0]
         cv2.rectangle(img, (x1, y1), (x2, y2), color, 3)
         cv2.rectangle(
             img, (x1, y1), (x1 + t_size[0] + 3, y1 + t_size[1] + 4), color, -1)
         cv2.putText(img, label, (x1, y1 +
                                  t_size[1] + 4), cv2.FONT_HERSHEY_PLAIN, 2, [255, 255, 255], 2)
+                                 
+    
     return img
+'''    
+    #draw line between car and person
+    for i, box in enumerate(bbox):
+        x1, y1, x2, y2 = [int(i) for i in box]
+        x1 += offset[0]
+        x2 += offset[0]
+        y1 += offset[1]
+        y2 += offset[1]
+        cenx = int((x1+x2)/2)
+        ceny = int((y1+y2)/2)
+        
+        if cls_name[i] == "car":
+            for j, box in enumerate(bbox):
+                x3, y3, x4, y4 = [int(j) for j in box]
+                x3 += offset[0]
+                x4 += offset[0]
+                y3 += offset[1]
+                y4 += offset[1]
+                cenx2 = int((x3+x4)/2)
+                ceny2 = int((y3+y4)/2)
+                if cls_name[j] == "person":
+                    cv2.line(img, (cenx, ceny), (cenx2, ceny2), color, 3)
+'''                  
+
+def detect_move(previouss, outputs):
+    output = outputs
+    previous = previouss
+    if previous == '':
+        previous = output
+        return output
+        
+    for i, obj123 in enumerate(outputs):
+        try:
+            print(obj123[:2])
+            print(previous[i][:2])
+            if not np.allclose(obj123[:2], previous[i][:2]):
+                print(obj123[-2:-1])
+                if obj123[-2:-1] == 2:
+                    obj123[-2:-1] = 10
+                    print("Car change")
+        except IndexError:
+            pass
+    previous = output
+    return previous, output    
 
 
 def detect(opt):
@@ -69,7 +119,7 @@ def detect(opt):
         opt.output, opt.source, opt.weights, opt.view_vid, opt.save_vid, opt.save_txt, opt.img_size
     webcam = source == '0' or source.startswith(
         'rtsp') or source.startswith('http') or source.endswith('.txt')
-
+    previouss = []
     # initialize deepsort
     cfg = get_config()
     cfg.merge_from_file(opt.config_deepsort)
@@ -155,25 +205,29 @@ def detect(opt):
 
                 bbox_xywh = []
                 confs = []
-
+                cls_outputs = []
+                
                 # Adapt detections to deep sort input format
                 for *xyxy, conf, cls in det:
                     x_c, y_c, bbox_w, bbox_h = bbox_rel(*xyxy)
                     obj = [x_c, y_c, bbox_w, bbox_h]
+                    cls_outputs.append(cls)
                     bbox_xywh.append(obj)
                     confs.append([conf.item()])
 
                 xywhs = torch.Tensor(bbox_xywh)
                 confss = torch.Tensor(confs)
-
                 # Pass detections to deepsort
-                outputs = deepsort.update(xywhs, confss, im0)
-
+                outputs = deepsort.update(xywhs, confss, cls_outputs, im0)
+                previouss, outputs = detect_move(previouss, outputs)
                 # draw boxes for visualization
                 if len(outputs) > 0:
                     bbox_xyxy = outputs[:, :4]
                     identities = outputs[:, -1]
-                    draw_boxes(im0, bbox_xyxy, identities)
+                    cls_name = outputs[:, -2:-1]
+                    if 10 in cls_name:
+                        print("!!!!!! There is Car !!!!!!")
+                    draw_boxes(im0, bbox_xyxy, [names[int(i)] for i in cls_name], identities)
 
                 # Write MOT compliant results to file
                 if save_txt and len(outputs) != 0:
@@ -251,7 +305,7 @@ if __name__ == '__main__':
                         help='save results to *.txt')
     # class 0 is person
     parser.add_argument('--classes', nargs='+', type=int,
-                        default=[0], help='filter by class')
+                        default=[0, 1, 2, 3, 5, 7], help='filter by class')
     parser.add_argument('--agnostic-nms', action='store_true',
                         help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true',

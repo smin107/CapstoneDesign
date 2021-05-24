@@ -82,7 +82,7 @@ class Tracker:
         for detection_idx in unmatched_detections:
             self._initiate_track(detections[detection_idx])
         self.tracks = [t for t in self.tracks if not t.is_deleted()]
-
+        
         # Update distance metric.
         active_targets = [t.track_id for t in self.tracks if t.is_confirmed()]
         features, targets = [], []
@@ -130,14 +130,15 @@ class Tracker:
             linear_assignment.min_cost_matching(
                 iou_matching.iou_cost, self.max_iou_distance, self.tracks,
                 detections, iou_track_candidates, unmatched_detections)
-
+        
         matches = matches_a + matches_b
         unmatched_tracks = list(set(unmatched_tracks_a + unmatched_tracks_b))
         return matches, unmatched_tracks, unmatched_detections
 
     def _initiate_track(self, detection):
         mean, covariance = self.kf.initiate(detection.to_xyah())
+        name = detection.name
         self.tracks.append(Track(
-            mean, covariance, self._next_id, self.n_init, self.max_age,
+            mean, covariance, self._next_id, self.n_init, self.max_age, name,
             detection.feature))
         self._next_id += 1
